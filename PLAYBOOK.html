@@ -1,0 +1,334 @@
+<html><head><meta charset='utf-8'><style>body{font-family:sans-serif;font-size:10.5pt;margin:28px;line-height:1.4}table{border-collapse:collapse;width:100%;margin:8px 0}td,th{border:1px solid #bbb;padding:4px;font-size:9pt;vertical-align:top}th{background:#eee}pre{background:#f4f4f4;padding:8px;white-space:pre-wrap;font-size:8.5pt}h2{border-bottom:2px solid #333;margin-top:22px}</style></head><body><h1>REA Applied Playbook: @P7RIM3 / Research Desk</h1>
+<p>Version 2026-10-13 ET · REA <code>rea-agents</code> 6.4.0 (https://github.com/morluto/rea) · MCP namespace <code>user-rea</code>
+Sources: S1–S15 in <code>cheatsheets/SOURCES.md</code>. Community posts are untrusted claims. Official REA docs win every conflict.</p>
+<hr />
+<h2>0. Ground rules (read first)</h2>
+<p>From REA <code>DISCLAIMER.md</code>:
+- <strong>Allowed:</strong> security research, malware and incident analysis, vulnerability research and coordinated disclosure, CTFs and education, interoperability, preservation, and debugging or auditing software you <strong>own or are authorized</strong> to examine.
+- <strong>Not allowed:</strong> bypassing DRM, license checks or paywalls; cheats; bypassing auth or bot protection; <strong>copying proprietary code or assets</strong>; evading AI-provider policies; reselling accounts.
+- "Public availability … does not by itself establish permission." Authorization to inspect a file does <strong>not</strong> authorize executing it, intercepting its traffic, or touching other parties' systems.
+- REA output can be wrong. Verify Evidence before acting on it. Analysis output grants <strong>no rights</strong> to the original program.</p>
+<p><strong>Corrections to community claims:</strong>
+| Claim | Source | Verdict |
+|---|---|---|
+| "Unlocked TradingView premium / free premium indicators" | S8 Bober | ❌ License/paywall bypass. Not allowed. Use only the lawful clean-room pattern in §7. |
+| $37 → $8k order-book trading | S6 Tenzo | ❌ Anecdote, not an expected return. |
+| "$200/mo 24/7 AI trading team", $10M NAV dashboard | S10 Khairallah | ⚠️ Demo paper book. Nothing shows live returns. |
+| "$30/mo X Subscription bundles Grok + Cursor + Premium"; "approvals expire ~10 min" | S11 le0xet | ⚠️ Unverified. Check official pricing and product docs. |
+| "5 workers for $3/M tokens" | S12 slash1sol | ⚠️ Unverified. Article body not retrieved, and the rate depends on model and input/output mix. |
+| "62 agents / 29 routines" | S13 Av1dlive | ⚠️ The image says 36 routines and 18 live. About half are paused. |
+| "Opus 5.5: $4 in / $20 out / $5 cache write / $0.20 cache read; $5.60 vs $43.20" | S14 zodchiii | ✅ Confirmed at https://www.anthropic.com/pricing (Oct 13 ET); the math re-computes exactly (§10.5). |
+| "REA has 130K GitHub stars" | S14 zodchiii | 🔧 Corrected: 204,103 stars via https://api.github.com/repos/morluto/rea (Oct 13, 5:43 PM ET). |
+| "143k stars in 2 days", "19.4k stars" | S8, S9 | ⚠️ Social proof. Check the repo yourself. |</p>
+<hr />
+<h2>1. The investigation loop (S1 Codila + official REA)</h2>
+<pre><code>ASK → INSPECT &amp; TRACE → READ EVIDENCE → USE → (unknowns?) → loop
+</code></pre>
+<ol>
+<li><strong>Ask</strong> a specific, testable question ("How does the export button build its request?").</li>
+<li><strong>Inspect &amp; trace</strong> with <code>user-rea</code> tools (local analysis; REA uploads nothing). Optional providers: Ghidra, IDA, Hopper, JADX/JEB, Chrome CDP.</li>
+<li><strong>Read Evidence.</strong> Keep three things separate: <em>observation</em>, <em>inference</em>, and <em>unknown</em>. Every claim cites an Evidence record.</li>
+<li><strong>Use</strong> it: explain, implement your own code, or write tests. Never paste protected code.</li>
+<li><strong>Unknowns</strong> go to <code>record_unknown</code>, get resolved with <code>verify_unknown_resolution</code>, and get audited with <code>list_unknowns</code>.</li>
+</ol>
+<p><strong>Definition of done (S4 "no proof, no done"):</strong> an exported Evidence bundle (<code>export_evidence_bundle</code>), the residual-unknowns list, and a <code>verify_reconstruction</code> pass for any spec you claim.</p>
+<hr />
+<h2>2. Setup &amp; readiness (box only; nothing installed on user machines)</h2>
+<pre><code class="language-bash">node --version          # 22+ (24/26 supported)
+npx rea-agents setup    # configures MCP client
+rea doctor              # readiness: providers, Chrome CDP, ADB, Ghidra
+rea doctor --target &lt;path&gt;
+</code></pre>
+<p>Notes: Windows Ghidra is P0 read-only (6.4.0). Bring your own legally obtained IDA, Hopper and JEB licenses.</p>
+<hr />
+<h2>3. Target maps → <code>user-rea</code> tools</h2>
+<h3>3.1 Native (Mach-O / PE / ELF)</h3>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Tool</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Open &amp; session</td>
+<td><code>open_binary</code> → <code>binary_session</code> → <code>binary_overview</code> / <code>inspect_binary_layout</code></td>
+</tr>
+<tr>
+<td>Find the feature</td>
+<td><code>search_strings</code>, <code>search_procedures</code>, <code>list_strings</code>, <code>list_procedures</code></td>
+</tr>
+<tr>
+<td>Trace</td>
+<td><code>trace_feature</code> (literal query) → <code>xrefs</code> / <code>find_xrefs_to_name</code> → <code>resolve_containing_procedure</code></td>
+</tr>
+<tr>
+<td>Read code</td>
+<td><code>analyze_function</code>, <code>procedure_pseudo_code</code>, <code>procedure_assembly</code>, <code>batch_decompile</code>, <code>read_function_instructions</code></td>
+</tr>
+<tr>
+<td>Call paths</td>
+<td><code>get_call_graph</code>, <code>build_call_path</code>, <code>trace_call_path</code>, <code>procedure_callers</code>/<code>callees</code></td>
+</tr>
+<tr>
+<td>Annotate</td>
+<td><code>set_comment</code>, <code>set_address_name</code>, <code>set_bookmark</code></td>
+</tr>
+<tr>
+<td>Apple extras</td>
+<td><code>inspect_macho</code>, <code>get_objc_classes</code>, <code>analyze_swift_types</code>, <code>inspect_plist</code>, <code>inspect_signature</code>, <code>project_apple_application_graph</code></td>
+</tr>
+<tr>
+<td>Windows extras</td>
+<td><code>inspect_pe_resources</code></td>
+</tr>
+<tr>
+<td>Runtime (only with authorization to execute)</td>
+<td><code>prepare_bounded_process_capture</code> prompt → <code>capture_process_scenario</code>, <code>observe_native_calls</code>, <code>correlate_static_and_runtime</code></td>
+</tr>
+<tr>
+<td>Close</td>
+<td><code>export_evidence_bundle</code> → <code>close_binary</code></td>
+</tr>
+</tbody>
+</table>
+<h3>3.2 JavaScript / Electron</h3>
+<p><code>analyze_javascript_application</code> (ASAR or dir, no execution) → <code>inspect_analysis_view</code> → <code>trace_application_feature</code> / <code>trace_javascript_semantics</code> → <code>recover_javascript_sources</code> → runtime: <code>list_electron_targets</code>, <code>inspect_electron_page</code>, <code>capture_electron_scenario</code>, <code>observe_javascript_runtime</code>, <code>reconcile_javascript_runtime</code>.</p>
+<h3>3.3 Web (Chrome CDP, loopback)</h3>
+<p><code>list_browser_targets</code> → <code>inspect_web_page</code> (passive) → <code>analyze_web_bundle</code> (chunks, routes, endpoints) → <code>inspect_web_event_listeners</code> → <code>trace_web_module_imports</code>, <code>trace_web_source_location</code> → <code>observe_web_session</code> / <code>observe_web_execution</code> → <code>capture_browser_scenario</code> (only if passive observation can't exercise the app) → <code>inspect_web_network_capture</code> (offline HAR/mitm) → <code>export_web_scripts</code>, <code>capture_web_screenshot</code>, <code>compare_web_captures</code>.
+⚠️ Stay on public behavior using your own logged-in entitlement. No paywall or bot-protection bypass.</p>
+<h3>3.4 Android</h3>
+<p>Static: <code>inspect_android_package</code>, <code>search_android_classes</code>, <code>inspect_android_class</code>, <code>inspect_android_method</code>, <code>trace_android_references</code>, <code>decode_android_resources</code>, <code>project_android_application_graph</code>; JEB: <code>open_jeb_project</code>, <code>decompile_jeb_item</code>.
+Device (your own device): <code>list_adb_devices</code>, <code>inspect_adb_device</code>, <code>list_adb_packages</code>, <code>pull_adb_package</code>, <code>read_adb_logcat</code>, <code>capture_adb_screen</code>. <strong>Changes the device, so draft and ask first:</strong> <code>install_adb_package</code>, <code>uninstall_adb_package</code>, <code>push_adb_file</code>, <code>start_adb_app</code>.</p>
+<h3>3.5 Firmware</h3>
+<p><code>extract_firmware</code> → <code>inspect_firmware_regions</code> → <code>open_binary</code> on extracted images → native flow.</p>
+<h3>3.6 Smart contracts (EVM)</h3>
+<p><code>inspect_evm_interface</code> on a <strong>local flat bytecode file</strong>: selectors, args, mutability. No chain/RPC access and no execution. This is audit support, <strong>not</strong> a DeFi trading bot.</p>
+<h3>3.7 .NET / managed</h3>
+<p><code>inspect_managed_artifact</code>, <code>inspect_managed_members</code>, <code>compare_managed_members</code>, <code>inspect_managed_native_boundaries</code>, <code>project_managed_application_graph</code>.</p>
+<h3>3.8 Compare &amp; verify (all targets)</h3>
+<p><code>compare_application_versions</code> prompt → <code>compare_artifacts</code>, <code>compare_functions</code>, <code>compare_bundles</code>, <code>find_changed_behavior</code> → <code>build_reconstruction_obligation_ledger</code> → <code>evaluate_reconstruction_coverage</code> → <code>verify_reconstruction</code>.</p>
+<hr />
+<h2>4. Copy-paste prompt pack</h2>
+<p>The six official MCP prompts are <code>investigate_feature</code>, <code>compare_application_versions</code>, <code>verify_reconstruction</code>, <code>trace_crash</code>, <code>audit_residual_unknowns</code>, and <code>prepare_bounded_process_capture</code>.</p>
+<pre><code class="language-text">[INVESTIGATE] Using user-rea, investigate_feature &quot;&lt;feature&gt;&quot; in &lt;path&gt;. I own/am authorized
+to analyze it. Static only. Separate observations / inferences / unknowns, cite Evidence IDs,
+record_unknown for gaps, export_evidence_bundle to ./evidence/&lt;name&gt;.json.
+
+[DIFF] compare_application_versions &lt;old&gt; &lt;new&gt;. List behavior changes with Evidence;
+flag anything security-relevant. No execution.
+
+[WEB] list_browser_targets on loopback CDP, inspect_web_page + analyze_web_bundle for &lt;origin&gt;
+(my own logged-in session). Map routes/endpoints for feature &lt;X&gt;. Passive only; no paywall bypass.
+
+[CRASH] trace_crash with symptom &quot;&lt;log line&gt;&quot; against &lt;binary&gt;. Propose a bounded capture plan
+(prepare_bounded_process_capture) but do not run it until I approve.
+
+[AUDIT] audit_residual_unknowns: list open unk_ heads by severity; which can be resolved statically?
+
+[SPEC→BUILD] From exported Evidence write an independent behavioral spec (no copied code),
+then verify_reconstruction against it. Report coverage and failing claims.
+</code></pre>
+<hr />
+<h2>5. Unknowns, Evidence &amp; memory routing (S5)</h2>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Route</th>
+<th>Owner / expiry</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Evidence bundle <code>ev_…</code></td>
+<td>Project folder (<code>evidence/</code>); approved team memory once reviewed</td>
+<td>Investigator; re-check on target version change</td>
+</tr>
+<tr>
+<td>Residual unknowns <code>unk_…</code></td>
+<td>Live in REA session plus private note</td>
+<td>Investigator; until resolved</td>
+</tr>
+<tr>
+<td>Decisions (spec, legal scope, authorization)</td>
+<td><strong>Approved team memory</strong> with source, scope, owner and review date</td>
+<td>You; review quarterly</td>
+</tr>
+<tr>
+<td>Live market data, prices, balances</td>
+<td><strong>Live source only</strong>, never memorized</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Secrets, API keys, captured credentials</td>
+<td><strong>Never</strong> in memory or notes; redact HAR captures</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>Gate: is it stable, shared, and sourced? If yes, it goes to team memory. If not, it stays a private note or is fetched live.</p>
+<hr />
+<h2>6. Team manager pattern (S4 Akarixbt, S10 Khairallah, S11 le0xet)</h2>
+<p>Brief every worker with: <strong>goal → brief/scope → authorized targets → verification ("no proof, no done") → approval boundaries.</strong></p>
+<p><strong>Overnight stoplines (S11):</strong>
+- <strong>SCOUT</strong> detects change (new REA release, new target version, new X mentions) and decides whether to wake anyone.
+- <strong>EXEC</strong> does reversible work alone: static REA analysis, diffs, Evidence export, drafts.
+- <strong>RISK</strong> gets anything irreversible (posts, emails, orders, ADB installs, runtime capture on third-party systems) and turns it into a <strong>draft or queued approval only</strong>.</p>
+<p>A chief-of-staff router (S10) should do routing and summaries, not trading.</p>
+<hr />
+<h2>7. Authorized trading-software &amp; quant-desk workflow (S6, S7, S8)</h2>
+<p>Pipeline (S7): <strong>authorized target → REA + MCP Evidence → independent model → quant validation → risk gates → paper trade → controlled review.</strong></p>
+<p>Net-return model: <strong>R_net = R_gross − C_fees − C_slippage − C_market-impact − C_ops.</strong> Never report a gross return alone.</p>
+<p>Lawful version of S8 "rebuild a charting workstation":
+1. Observe the <strong>public</strong> UI behavior of tools you're entitled to use: <code>inspect_web_page</code>, <code>capture_web_screenshot</code>.
+2. Write a <strong>behavioral spec</strong> in your own words (chart types, indicator math from public literature).
+3. Build <strong>your own</strong> charting and backtest engine with fees, slippage, and drawdown.
+4. Test it with <code>verify_reconstruction</code> against your own spec. Do <strong>not</strong> port proprietary indicator code, scripts, or premium-only features.</p>
+<p>Order-book discipline (S6, applied): check depth before size, don't trade a thin book, keep a cash buffer, and use limit orders.</p>
+<p><strong>Your book:</strong> Kraken <strong>spot</strong> only, about $108 in BTC/ETH/SOL/ADA, under the Research Desk limits. Paper trade first. No leverage. <strong>No unattended live orders.</strong> No guaranteed returns. REA output is research, not a trading signal.</p>
+<hr />
+<h2>8. Cost-efficient multi-worker REA runs (S12, S11, S13)</h2>
+<p>S12's "$3/M tokens" claim is <strong>unverified</strong>: the article body wasn't retrievable. Verify against current provider pricing (input vs output, cached vs uncached) before you plan around it.</p>
+<p>Lean rules that hold regardless of price:
+1. <strong>Do the heavy work locally, pay little for tokens.</strong> REA analysis runs locally. Send the model compact Evidence (IDs plus snippets), not whole decompiles. Prefer <code>trace_feature</code>/<code>search_*</code> over <code>batch_decompile</code> of everything.
+2. <strong>Tier workers by job.</strong> Use a cheap or fast model for scouts and triage (string search, diff summaries) and a strong model only for spec writing and verification.
+3. <strong>Parallelize by target, not by step.</strong> One worker per artifact or version, each with its own <code>binary_session</code>, merged by a chief of staff.
+4. <strong>Cap each worker:</strong> max tool calls, max decompiled functions, and a token budget per run. Stop at the residual-unknowns threshold and escalate.
+5. <strong>Cut wasted wakeups (S11).</strong> Scouts exit early when nothing changed. Every wakeup costs budget.
+6. <strong>Prune routines (S13).</strong> About half of the 36 routines were paused. Disable routines that haven't produced a decision in 2 weeks.
+7. <strong>Measure:</strong> log tokens, tool calls, and "findings per $" per routine. Re-check flat-rate vs metered pricing monthly, because it depends on volume.</p>
+<hr />
+<h2>9. Lean agent + routine layout for @P7RIM3 (S13 adapted)</h2>
+<p>You already run <strong>Research Desk</strong> and <strong>Signal</strong>. Add three narrow workers rather than 62.</p>
+<table>
+<thead>
+<tr>
+<th>Agent</th>
+<th>Role</th>
+<th>Routines</th>
+<th>Mode</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Research Desk</strong> (existing, chief of staff)</td>
+<td>Routes, merges Evidence, owns team memory, morning brief</td>
+<td>Morning brief 08:00 wkdays; weekly review Mon 09:00</td>
+<td>Live</td>
+</tr>
+<tr>
+<td><strong>REA Scout</strong> (new)</td>
+<td>Watches morluto/rea releases and new versions of authorized targets; runs static diff</td>
+<td>Daily 07:30 check; runs <code>compare_application_versions</code> only on change</td>
+<td>Live, exits early</td>
+</tr>
+<tr>
+<td><strong>REA Analyst</strong> (new, on demand)</td>
+<td>Runs §1 loop / §4 prompts, exports Evidence, lists unknowns</td>
+<td>Triggered by Scout or you</td>
+<td>On demand</td>
+</tr>
+<tr>
+<td><strong>Signal</strong> (existing)</td>
+<td>Market and news context for the Kraken spot book; paper-trade journal</td>
+<td>am + pm digest</td>
+<td>Live; drafts only, never orders</td>
+</tr>
+<tr>
+<td><strong>X Content Lead</strong> (new)</td>
+<td>Turns <em>verified</em> REA findings into X post/thread <strong>drafts</strong> (what changed, how verified, Evidence-backed; no proprietary code, no "free premium" claims)</td>
+<td>Weekday 08:55 draft from previous day's Evidence; weekly "REA field notes" Fri</td>
+<td><strong>Drafts only. You approve every post.</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>REA → X wiring:</strong> Scout detects → Analyst produces Evidence + unknowns → Research Desk reviews (stable/sourced? authorized target?) → Content Lead drafts a post citing the method, not protected internals → <strong>you approve</strong> → post. Live market numbers come from Signal at draft time, never from memory.</p>
+<p><strong>Running live vs paused lesson (S13):</strong> only 18 of 36 routines were live. Start with the 5 above, add a routine only when a manual task repeats 3+ times, and pause any routine with no approved output in 2 weeks.</p>
+<hr />
+<h2>10. Read-only RE workspace + findings log (S14 zodchiii, S15 RoundtableSpace)</h2>
+<p>S14 is a Claude Code guide. Its method maps onto <code>user-rea</code> directly. Use it only for targets you <strong>own or are authorized</strong> to analyze (§0). @zodchiii's follow-up post pitching it to "reverse-engineer any paid closed-source app" is <strong>excluded</strong>. S15 is a later, uncredited, truncated summary of S14's steps 1–2 and adds nothing new.</p>
+<h3>10.1 Loop → REA mapping</h3>
+<table>
+<thead>
+<tr>
+<th>S14 step</th>
+<th>REA on the box</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Read-only target (repo, HAR, bundle, binary)</td>
+<td><code>open_binary</code> / <code>open_jeb_project</code> on <code>target/</code>; REA analysis is static and doesn't run the target. Check with <code>binary_session</code>.</td>
+</tr>
+<tr>
+<td>Mechanical tools first (webcrack, Ghidra, REA)</td>
+<td><code>binary_overview</code>, <code>inspect_binary_layout</code>, <code>list_procedures</code>, <code>list_strings</code>, <code>analyze_javascript_application</code>, <code>recover_javascript_sources</code> (Wakaru, REA's equivalent of webcrack)</td>
+</tr>
+<tr>
+<td>Model analysis (trace, rename, explain)</td>
+<td><code>trace_feature</code>, <code>xrefs</code>, <code>get_call_graph</code>, <code>trace_javascript_semantics</code>, <code>analyze_function</code>, <code>procedure_pseudo_code</code>, <code>batch_decompile</code></td>
+</tr>
+<tr>
+<td>Findings log CONFIRMED / GUESS with file:line</td>
+<td>CONFIRMED = cites an Evidence ID plus address or file:line. GUESS = <code>record_unknown</code>. Read back with <code>list_unknowns</code>.</td>
+</tr>
+<tr>
+<td>Verified? No → new evidence with a cached follow-up</td>
+<td>Keep <strong>one session</strong>. Target the gap with <code>inspect_address_context</code>, <code>read_bytes</code>, <code>trace_native_values</code>, then <code>verify_unknown_resolution</code> / <code>update_unknown</code>.</td>
+</tr>
+<tr>
+<td>Yes → ARCHITECTURE.md</td>
+<td>Write it from <code>get_evidence_bundle</code>, then <code>export_evidence_bundle</code> to <code>notes/evidence.json</code>. Open questions come from <code>list_unknowns</code>.</td>
+</tr>
+<tr>
+<td>Spec/client (openapi.yaml, client.ts, .ksy, parse.py)</td>
+<td>Write an independent spec, then <code>build_reconstruction_obligation_ledger</code> → <code>evaluate_reconstruction_coverage</code> → <code>verify_reconstruction</code></td>
+</tr>
+</tbody>
+</table>
+<h3>10.2 Workspace on the box</h3>
+<pre><code>/workspace/re/&lt;target&gt;/
+  target/   # chmod -R a-w; analysis input only
+  notes/    # FINDINGS.md, ARCHITECTURE.md, evidence.json, spec/
+  CLAUDE.md # rules: tag every claim CONFIRMED(ev_/file:line) or GUESS; never edit target/
+</code></pre>
+<p>The Claude Code <code>.claude/settings.json</code> in S14 (allow <code>Read(./target/**)</code> and <code>Edit(./notes/**)</code>; deny <code>Edit(./target/**)</code>, WebFetch, WebSearch, curl and wget) is a convenience, not a security boundary. On the box, make <code>target/</code> read-only at the filesystem level and run any execution only through REA's bounded capture tools after approval (§3.1).</p>
+<h3>10.3 Workflows</h3>
+<ul>
+<li><strong>A. Codebase map:</strong> find the entry points (<code>list_procedures</code>/<code>search_procedures</code>, or <code>analyze_javascript_application</code> for JS) → trace the 5 main data flows (<code>trace_feature</code>, <code>trace_call_path</code>, <code>trace_application_feature</code>) → diagram → flag hardcoded secrets (<code>search_strings</code> regex) and dead code (procedures with no <code>procedure_callers</code>) → ARCHITECTURE.md.</li>
+<li><strong>B. API rebuild:</strong> use <strong>your own</strong> HAR, with Authorization headers, cookies and tokens redacted <em>before</em> analysis (failure mode 2) → <code>inspect_web_network_capture</code> (offline, contacts nothing) + <code>analyze_web_bundle</code> for endpoints → OpenAPI 3.1 + typed TS client. Only for APIs you're entitled to use.</li>
+<li><strong>C. Deobfuscation:</strong> <code>recover_javascript_sources</code> (or webcrack) → rename, logging each rename in <code>notes/RENAMES.md</code> → for native targets, <code>set_addresses_names</code> + <code>annotate_native_function</code> (readback verified) → spot-check about 10% against <code>procedure_pseudo_code</code>.</li>
+<li><strong>D. Binary analysis:</strong> Ghidra/IDA/Hopper through <code>open_binary</code>, Android through JADX (<code>inspect_android_*</code>) or JEB (<code>decompile_jeb_item</code>). <strong>Checkpoint after 30 functions</strong> and confirm the direction with you before continuing.</li>
+<li><strong>E. File formats:</strong> use 3–5 of your own samples → <code>open_binary</code> + <code>read_bytes</code> / <code>inspect_firmware_regions</code> → <code>format.ksy</code> (Kaitai) + <code>parse.py</code> → check that every sample parses.</li>
+</ul>
+<h3>10.4 Prompt</h3>
+<pre><code class="language-text">[S14-RE] Target ./target/&lt;x&gt; (I own/am authorized). Read-only; write only to ./notes.
+Run mechanical user-rea tools first, then explain. Log each claim in notes/FINDINGS.md as
+CONFIRMED (Evidence ID + file:line/address) or GUESS (+record_unknown). Stop after 30
+functions and report direction. Final: ARCHITECTURE.md + export_evidence_bundle.
+</code></pre>
+<h3>10.5 Cost check: ✅ confirmed (Oct 13 2026 ET)</h3>
+<p>Opus 5.5 at https://www.anthropic.com/pricing costs $4 input, $20 output, $5 cache write and $0.20 cache read per MTok (5-minute TTL). Recomputed for a 400K-token context with 25 follow-ups and 80K output tokens in total:
+- <strong>Cached:</strong> $2.00 write + $2.00 reads + $1.60 output = <strong>$5.60</strong>
+- <strong>Fresh:</strong> 26 × $1.60 = $41.60 + $1.60 output = <strong>$43.20</strong></p>
+<p>Both match. The assumptions are follow-ups within 5 minutes of each other (otherwise a $2 re-write each time) and question tokens ignored. Same lesson as §8: keep one warm session per target.</p>
+<h3>10.6 Failure modes (S14)</h3>
+<ol>
+<li>Skipping the CONFIRMED/GUESS tags.</li>
+<li>Analyzing raw HARs that still contain tokens.</li>
+<li>Letting the model write to <code>target/</code>.</li>
+<li>Opening a fresh session per question.</li>
+<li>Trusting renames without spot-checking about 10%.</li>
+</ol>
+<p>REA claim check: S14 says 130K stars, and the GitHub API shows <strong>204,103</strong> (https://github.com/morluto/rea, Oct 13 2026, 5:43 PM ET). 🔧 Corrected.</p>
+<hr />
+<h2>11. Gaps</h2>
+<ul>
+<li>S1 Codila: page 1 only. S13: page 2/2 only. Page 1 is not in the payload; the user's attachment is the same page 2.</li>
+<li>S6, S8–S11 are videos; previews and frames saved and text taken from the notes. The S10 quoted article returned 404; the S12 article body is not retrievable.</li>
+<li>S9 (local ElevenLabs alternative) is off-topic; it's kept only as a star-count-hype example.</li>
+<li>All pricing claims are unverified (§0).</li>
+<li>S15 is cut off at step 3, and its photo wasn't opened, so whether it copies S14 is inferred from timing and wording only.</li>
+</ul></body></html>
